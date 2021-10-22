@@ -31,7 +31,7 @@ class MineClient(discord.Client):
     async def server_status(self):
         with Client(SERVER_IP, 25565) as client:
             pls = client.stats(full=True).players
-            if len(pls) != len(self.old):
+            if pls != self.old:
                 try:
                     message = f'**{", ".join(set(pls) ^ (set(self.old)))}** ' \
                           f'Has {"Joined" if pls else "Left"} The Server\n' \
