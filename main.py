@@ -7,49 +7,70 @@ from discord.ext import tasks
 from mcipc.query import Client
 from mcipc.rcon.je import Client as rClient
 
-TOKEN = os.getenv('BOT_TOKEN')
-SERVER_IP = os.getenv('SERVER_IP')
-if TOKEN is None or SERVER_IP is None:
-    print("ARG", TOKEN, SERVER_IP)
-    exit(0)
-
 
 class MineClient(discord.Client):
     def __init__(self, *, loop=None, **options):
         super().__init__()
-        self.main_ch = None
         self.old = []
+        self.guild_servers = {}
 
     async def on_ready(self):
         print(f'{self.user} has connected')
+        self.server_status.start()
 
     async def on_message(self, message: discord.Message):
         if message.author == self.user:
             return
-        if message.content == '!Start':
-            await message.channel.send('Starting')
-            self.main_ch = message.channel
-            self.server_status.start()
+        if message.content.startswith('!Start'):
+            channel = message.channel
+            guild_id = message.guild.id
+            if len(message.content.split("!Start ")) > 1:
+                await message.channel.send('Starting')
+                _, ip = message.content.split("!Start ")
+                port = 25565
+                if ":" in ip:
+                    ip, port = ip.split(":")
+                await self.add_server(guild_id, channel, ip, port)
+            else:
+                await channel.send("Usage: !Start <ip_address>[:port]")
+        if message.content.startswith('!Stop'):
+            del self.guild_servers[message.guild.id]
         if message.content == '!Query':
-            self.main_ch = message.channel
-            with Client(SERVER_IP, 25565) as client:
+            curr_channel = message.channel
+            channel, ip, port = self.guild_servers[message.guild.id]
+            with Client(ip, port) as client:
                 pls = client.stats(full=True).players
                 message = f'Current Players Online: **{", ".join(pls) if pls else "None"}**'
                 embed = discord.Embed(type='rich', description=message)
-                await self.main_ch.send(embed=embed)
+                await curr_channel.send(embed=embed)
+
+    async def add_server(self, guild_id, channel, server_ip, port):
+        if guild_id not in self.guild_servers:
+            self.guild_servers[guild_id] = (channel, server_ip, port)
+            message = f"Now listening to {server_ip}:{port}"
+        else:
+            message = f"Currently only one MC server per Discord server is allowed\n" \
+                      f"Current server: {self.guild_servers[guild_id][1]}\n" \
+                      f"Send \"!Stop\" to switch servers"
+        await channel.send(message)
 
     @tasks.loop(seconds=5.0)
     async def server_status(self):
-        with Client(SERVER_IP, 25565) as client:
-            pls = client.stats(full=True).players
-            if pls != self.old:
-                message = f'**{", ".join(set(pls) ^ (set(self.old)))}** ' \
-                      f'Has {"Joined" if pls else "Left"} The Server\n' \
-                      f'Current Players Online: **{", ".join(pls) if pls else "None"}**'
-                embed = discord.Embed(type='rich', description=message)
-                await self.main_ch.send(embed=embed)
-            self.old = pls
+        for g_id, (channel, ip, port) in self.guild_servers.items():
+            with Client(ip, port) as client:
+                pls = client.stats(full=True).players
+                if pls != self.old:
+                    message = ""
+                    for player in (set(pls) ^ set(self.old)):
+                        message += f"**{player}** has " \
+                                   f"{'Joined' if player in pls else 'Left'} " \
+                                   f"the server\n"
+                    message += f'Current Players Online: **{", ".join(pls) if pls else "None"}**'
+                    embed = discord.Embed(type='rich', description=message)
+                    await channel.send(embed=embed)
+                self.old = pls
 
 
+TOKEN = os.getenv('BOT_TOKEN')
 discordClient = MineClient()
 discordClient.run(TOKEN)
