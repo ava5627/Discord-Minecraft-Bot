@@ -9,6 +9,10 @@ from mcipc.rcon.je import Client as rClient
 
 TOKEN = os.getenv('BOT_TOKEN')
 SERVER_IP = os.getenv('SERVER_IP')
+if TOKEN is None or SERVER_IP is None:
+    print("ARG", TOKEN, SERVER_IP)
+    exit(0)
+
 
 class MineClient(discord.Client):
     def __init__(self, *, loop=None, **options):
@@ -22,22 +26,26 @@ class MineClient(discord.Client):
     async def on_message(self, message: discord.Message):
         if message.author == self.user:
             return
-        if message.content == 'Start':
+        if message.content == '!Start':
             await message.channel.send('Starting')
             self.main_ch = message.channel
             self.server_status.start()
+        if message.content == '!Query':
+            self.main_ch = message.channel
+            with Client(SERVER_IP, 25565) as client:
+                pls = client.stats(full=True).players
+                message = f'Current Players Online: **{", ".join(pls) if pls else "None"}**'
+                embed = discord.Embed(type='rich', description=message)
+                await self.main_ch.send(embed=embed)
 
     @tasks.loop(seconds=5.0)
     async def server_status(self):
         with Client(SERVER_IP, 25565) as client:
             pls = client.stats(full=True).players
             if pls != self.old:
-                try:
-                    message = f'**{", ".join(set(pls) ^ (set(self.old)))}** ' \
-                          f'Has {"Joined" if pls else "Left"} The Server\n' \
-                          f'Current Players Online: **{", ".join(pls) if pls else "None"}**'
-                except Exception as e:
-                    print(e)
+                message = f'**{", ".join(set(pls) ^ (set(self.old)))}** ' \
+                      f'Has {"Joined" if pls else "Left"} The Server\n' \
+                      f'Current Players Online: **{", ".join(pls) if pls else "None"}**'
                 embed = discord.Embed(type='rich', description=message)
                 await self.main_ch.send(embed=embed)
             self.old = pls
