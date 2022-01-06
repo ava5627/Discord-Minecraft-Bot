@@ -1,16 +1,10 @@
-import asyncio
 import os
 import socket
-
-import discord
-
 from dataclasses import dataclass, field
 
-from discord import Color
+import discord
 from discord.ext import tasks
-
 from mcipc.query import Client
-from mcipc.rcon.je import Client as rClient
 
 
 class MineClient(discord.Client):
@@ -42,7 +36,6 @@ class MineClient(discord.Client):
         if content.startswith('!query'):
             if ip and port:
                 sent = False
-                print(ip, port)
                 try:
                     with Client(ip, port, timeout=3) as client:
                         pls = client.stats(full=True).players
