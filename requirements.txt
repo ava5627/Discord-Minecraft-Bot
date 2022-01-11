@@ -1,2 +1,3 @@
 discord>=1.7.3
 mcipc>=2.3.5
+PyYAML>=6.0

@@ -1,8 +1,11 @@
+import asyncio
 import os
 import socket
 from dataclasses import dataclass, field
 
 import discord
+import yaml
+from yaml import Loader
 from discord.ext import tasks
 from mcipc.query import Client
 
@@ -15,6 +18,12 @@ class MineClient(discord.Client):
 
     async def on_ready(self):
         print(f'{self.user} has connected')
+        try:
+            with open("servers.yml", 'r') as file:
+                self.servers = yaml.load(file, Loader)
+        except FileNotFoundError:
+            pass
+        print('here')
         self.server_status.start()
 
     async def on_message(self, message: discord.Message):
@@ -23,6 +32,8 @@ class MineClient(discord.Client):
         content = message.content.lower()
         channel = message.channel
         ip, port = extract_ip(content)
+        if content.startswith('!kill'):
+            exit(1)
         if content.startswith('!start'):
             if ip and port:
                 await self.add_server(channel, ip, port)
@@ -61,9 +72,17 @@ class MineClient(discord.Client):
 
     async def add_server(self, channel, server_ip, port):
         try:
+            server = MCServer(channel.id, server_ip, port)
             with Client(server_ip, port, timeout=3) as client:
-                reply = f"Now monitoring {server_ip}:{port}"
-            self.servers += [MCServer(channel, server_ip, port)]
+                stats = client.stats(full=True)
+                if stats.host_name != "A Minecraft Server":
+                    server.name = stats.host_name
+                else:
+                    server.name = f'{server_ip}:{port}'
+                reply = f"Now monitoring {server.name}"
+            self.servers += [server]
+            with open("servers.yml", 'w') as file:
+                yaml.dump(self.servers, file)
         except ConnectionRefusedError:
             reply = "Connection Refused"
         except socket.timeout as timeout:
@@ -76,12 +95,14 @@ class MineClient(discord.Client):
     async def remove_server(self, channel, server_ip, port):
         found = False
         for server in self.servers.copy():
-            if server.ip == server_ip and port == server.port and server.channel.id == channel.id:
+            if server.ip == server_ip and port == server.port and server.channel_id == channel.id:
                 found = True
                 self.servers.remove(server)
-                message = f"No longer monitoring {server_ip}:{port}"
+                message = f"No longer monitoring {server.name}"
                 embed = discord.Embed(type='rich', description=message)
                 await channel.send(embed=embed)
+        with open("servers.yml", 'w') as file:
+            yaml.dump(self.servers, file)
         if not found:
             await channel.send(
                 f"Unable to find server with ip {server_ip}:{port}\n"
@@ -95,24 +116,26 @@ class MineClient(discord.Client):
             try:
                 with Client(server.ip, server.port, timeout=3) as client:
                     server.timeout = 3600
-                    pls = client.stats(full=True).players
+                    pls = set(client.stats(full=True).players)
                     if pls != server.old:
                         message = ""
-                        for player in (set(pls) ^ set(server.old)):
+                        for player in (pls ^ server.old):
                             message += f"**{player}** has " \
                                        f"{'Joined' if player in pls else 'Left'} " \
-                                       f"{server.ip}\n"
+                                       f"{server.name}\n"
                         message += f'Current Players Online: **{", ".join(pls) if pls else "None"}**'
                         embed = discord.Embed(type='rich', description=message)
-                        await server.channel.send(embed=embed)
-                    server.old = pls
+                        channel = await self.fetch_channel(server.channel_id)
+                        await channel.send(embed=embed)
+                    server.old = set(pls)
             except ConnectionRefusedError:
                 if server.timeout <= 0:
                     reply = "Unable to reach server for more than 1 hour" \
-                            f"\nmonitoring stopped for {server.ip}:{server.port}"
+                            f"\nmonitoring stopped for {server.name}"
                     self.servers.remove(server)
                     embed = discord.Embed(type='rich', description=reply)
-                    await server.channel.send(embed=embed)
+                    channel = await self.fetch_channel(server.channel_id)
+                    await channel.send(embed=embed)
                 else:
                     server.timeout -= 5
 
@@ -123,19 +146,21 @@ def extract_ip(ip_string):
         port = 25565
         if ":" in ip:
             ip, port = ip.split(":")
-        return ip, port
+        return ip, int(port)
     return None, None
 
 
 @dataclass
 class MCServer:
-    channel: discord.TextChannel
+    channel_id: int
     ip: str
     port: int = 25565
-    old: list[str] = field(default_factory=list)
-    timeout: int = 3600
+    name: str = ""
+    old: set[str] = field(repr=False, hash=False, default_factory=set)
+    timeout: int = field(repr=False, hash=False, default=3600)
 
 
-TOKEN = os.getenv('BOT_TOKEN')
-discordClient = MineClient()
-discordClient.run(TOKEN)
+if __name__ == '__main__':
+    TOKEN = os.getenv('BOT_TOKEN')
+    discordClient = MineClient()
+    discordClient.run(TOKEN)
