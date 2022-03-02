@@ -1,4 +1,3 @@
-import asyncio
 import os
 import socket
 from dataclasses import dataclass, field
@@ -21,9 +20,9 @@ class MineClient(discord.Client):
         try:
             with open("servers.yml", 'r') as file:
                 self.servers = yaml.load(file, Loader)
+                print(self.servers)
         except FileNotFoundError:
             pass
-        print('here')
         self.server_status.start()
 
     async def on_message(self, message: discord.Message):
@@ -33,6 +32,7 @@ class MineClient(discord.Client):
         channel = message.channel
         ip, port = extract_ip(content)
         if content.startswith('!kill'):
+            await channel.send("kill")
             exit(1)
         if content.startswith('!start'):
             if ip and port:
@@ -109,7 +109,7 @@ class MineClient(discord.Client):
                 f"Note: monitoring can only be stopped in the same channel it was started"
             )
 
-    @tasks.loop(seconds=5.0)
+    @tasks.loop(seconds=5)
     async def server_status(self):
         for server in self.servers:
             reply = ""
@@ -162,5 +162,8 @@ class MCServer:
 
 if __name__ == '__main__':
     TOKEN = os.getenv('BOT_TOKEN')
+    if not TOKEN:
+        print("TOKEN not set")
+        exit()
     discordClient = MineClient()
     discordClient.run(TOKEN)
