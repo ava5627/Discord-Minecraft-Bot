@@ -46,7 +46,6 @@ class MineClient(discord.Client):
                 await channel.send("Usage: !Start <ip_address>[:port]")
         if content.startswith('!query'):
             if ip and port:
-                sent = False
                 try:
                     with Client(ip, port, timeout=3) as client:
                         pls = client.stats(full=True).players
