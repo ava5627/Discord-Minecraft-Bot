@@ -1,5 +1,6 @@
 import os
 import socket
+import re
 from dataclasses import dataclass, field
 from threading import Thread
 
@@ -16,7 +17,7 @@ from yaml import Loader
 
 class MineClient(discord.Client):
     def __init__(self, *, loop=None, **options):
-        super().__init__()
+        super().__init__(**options)
         self.old = []
         self.servers = []
         print("Initializing")
@@ -38,31 +39,36 @@ class MineClient(discord.Client):
             return
         content = message.content.lower()
         channel = message.channel
-        ip, port = extract_ip(content)
+        ip, port, etc = extract_ip(content)
         if content.startswith("!kill"):
-            await channel.send("kill")
-            os._exit(1)
+            if message.author.id == 97117492178067456:
+                await channel.send("kill")
+                os._exit(1)
+            else:
+                await channel.send("You are not authorized to use this command")
         if content.startswith("!start"):
             if ip and port:
-                await self.add_server(channel, ip, port)
+                await self.add_server(channel, ip, port, etc)
             else:
-                await channel.send("Usage: !Start <ip_address>[:port]")
+                await channel.send("Usage: !Start <ip_address>[:port] [Server Name]")
         if content.startswith("!stop"):
             if ip and port:
                 await self.remove_server(channel, ip, port)
             else:
-                await channel.send("Usage: !Start <ip_address>[:port]")
+                await channel.send("Usage: !Stop <ip_address>[:port]")
         if content.startswith("!query"):
             if ip and port:
                 await self.query(ip, port, channel)
             else:
                 await channel.send("Usage: !Query <ip_address>[:port]")
-
+        if content.startswith("!list"):
+            await self.list_servers(channel)
         if content in ["!help", "!h"]:
             await message.channel.send(
-                "!Start <ip_address>[:port] - Start monitoring <ip_address>\n"
+                "!Start <ip_address>[:port] [Server Name] - Start monitoring <ip_address>, [Server Name] is optional\n"
                 "!Query <ip_address>[:port] - List Current Players\n"
                 "!Stop  <ip_address>[:port] - Stop monitoring <ip_address>\n"
+                "!List - List all servers being monitored in this channel\n"
                 "!Help - Print this Message"
             )
 
@@ -89,12 +95,16 @@ class MineClient(discord.Client):
         embed = discord.Embed(type="rich", description=reply)
         await channel.send(embed=embed)
 
-    async def add_server(self, channel, server_ip, port):
+    async def add_server(self, channel, server_ip, port, name):
+        print(f"Adding {server_ip}:{port} {name}")
         try:
             server = MCServer(channel.id, server_ip, port)
             with Client(server_ip, port, timeout=3) as client:
                 stats = client.stats(full=True)
-                if stats.host_name != "A Minecraft Server":
+                print(name)
+                if name:
+                    server.name = name
+                elif stats.host_name != "A Minecraft Server":
                     server.name = stats.host_name
                 else:
                     server.name = f"{server_ip}:{port}"
@@ -107,7 +117,9 @@ class MineClient(discord.Client):
                 server = MCServer(channel.id, server_ip, port)
                 status = mcstatus.JavaServer.lookup(f"{server_ip}:{port}").status()
                 server.type = "mcstatus"
-                if status.description != "A Minecraft Server":
+                if name:
+                    server.name = name
+                elif status.description != "A Minecraft Server":
                     server.name = status.description
                 else:
                     server.name = f"{server_ip}:{port}"
@@ -144,6 +156,21 @@ class MineClient(discord.Client):
                 f"Unable to find server with ip {server_ip}:{port}\n"
                 f"Note: monitoring can only be stopped in the same channel it was started"
             )
+
+    async def list_servers(self, channel):
+        reply = "Currently Monitoring:\n"
+        for server in self.servers:
+            if server.channel_id == channel.id:
+                if server.name == f"{server.ip}:{server.port}":
+                    reply += f"\t{server.name}\n"
+                else:
+                    reply += f"\t{server.name} ({server.ip}:{server.port})\n"
+        if reply == "Currently Monitoring:\n":
+            reply = "Not currently monitoring any servers\n"
+            reply += "Use !Start <ip_address>[:port] to start monitoring a server\n"
+            reply += "Use !Help for more info"
+        embed = discord.Embed(type="rich", description=reply)
+        await channel.send(embed=embed)
 
     @tasks.loop(seconds=60)
     async def server_status(self):
@@ -204,13 +231,16 @@ class MineClient(discord.Client):
 
 
 def extract_ip(ip_string):
-    if len(ip_string.split()) > 1:
-        _, ip = ip_string.split()
-        port = 25565
-        if ":" in ip:
-            ip, port = ip.split(":")
-        return ip, int(port)
-    return None, None
+    # ip_string format: command ip_address[:port] [optional info]
+    # returns ip_address, port, optional info
+    match = re.match(r"(\S+)\s+([\w.]+)(?::(\S+))?(?:\s+(.*))?", ip_string)
+    if match:
+        ip = match.group(2)
+        port = match.group(3) if match.group(3) else 25565
+        info = match.group(4)
+        return ip, int(port), info
+    else:
+        return None, None, None
 
 
 @dataclass
@@ -237,7 +267,7 @@ if __name__ == "__main__":
     if not TOKEN:
         print("TOKEN not set")
         exit()
-    discordClient = MineClient()
+    discordClient = MineClient(intents=discord.Intents.all())
     iconThread = Thread(target=systray)
     iconThread.start()
     discordClient.run(TOKEN)
