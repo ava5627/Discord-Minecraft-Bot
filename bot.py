@@ -1,6 +1,9 @@
+import base64
+import logging
 import os
-import re
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta
+from io import BytesIO
 from threading import Thread
 
 import discord
@@ -8,25 +11,43 @@ import mcstatus
 import yaml
 from discord.ext import tasks
 from PIL import Image
-from pystray import Menu, MenuItem, Icon
+from pystray import Icon, Menu, MenuItem
 from yaml import Loader
 
 
 class MineClient(discord.Client):
+
     def __init__(self, *, loop=None, **options):
         super().__init__(**options)
         self.old = []
         self.servers = []
-        print("Initializing")
+        log_file = "discord.log"
+        if os.path.exists(log_file):
+            os.remove(log_file)
+        logging.basicConfig(
+            level=logging.INFO,
+            format="[%(asctime)s] %(levelname)s: %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S",
+            handlers=[logging.FileHandler(log_file), logging.StreamHandler()],
+        )
+        logging.info("Initializing")
 
     async def on_ready(self):
-        print(f"{self.user} has connected")
+        logging.info(f"{self.user} has connected")
         try:
             with open("servers.yml", "r") as file:
                 self.servers = yaml.load(file, Loader)
-                print("Saved servers loaded:")
+                logging.info(f"Loaded {len(self.servers)} servers")
                 for server in self.servers:
-                    print(f"\t{server.name}")
+                    if server.last_checked < datetime.now() - timedelta(days=1):
+                        server.old = set()
+                        status = self.lookup(server.address)
+                        if not isinstance(status, str):
+                            server.name = self.get_server_name(status)
+                            server.last_checked = datetime.now()
+                logging.info(
+                    "Servers loaded: " + ", ".join([s.name for s in self.servers])
+                )
         except FileNotFoundError:
             pass
         self.server_status.start()
@@ -36,184 +57,234 @@ class MineClient(discord.Client):
             return
         content = message.content.lower()
         channel = message.channel
-        ip, port, etc = extract_ip(content)
-        if content.startswith("!kill"):
-            if message.author.id == 97117492178067456:
-                await channel.send("kill")
-                os._exit(1)
+        _, address, *etc = content.split()
+        etc = " ".join(etc)
+        if not content.startswith("!"):
+            return
+
+        elif content.startswith("!start"):
+            if address:
+                await self.add_server(channel, address, etc)
             else:
-                await channel.send("You are not authorized to use this command")
-        if content.startswith("!start"):
-            if ip and port:
-                await self.add_server(channel, ip, port, etc)
+                await channel.send("Usage: !Start <ip_address> [Server Name]")
+        elif content.startswith("!stop"):
+            if address:
+                await self.remove_server(channel, address)
             else:
-                await channel.send("Usage: !Start <ip_address>[:port] [Server Name]")
-        if content.startswith("!stop"):
-            if ip and port:
-                await self.remove_server(channel, ip, port)
+                await channel.send("Usage: !Stop <ip_address>")
+        elif content.startswith("!query"):
+            if address:
+                await self.query(address, channel)
             else:
-                await channel.send("Usage: !Stop <ip_address>[:port]")
-        if content.startswith("!query"):
-            if ip and port:
-                await self.query(ip, port, channel)
-            else:
-                await channel.send("Usage: !Query <ip_address>[:port]")
-        if content.startswith("!list"):
+                await channel.send("Usage: !Query <ip_address>")
+        elif content in ["!list", "!l"]:
             await self.list_servers(channel)
-        if content in ["!help", "!h"]:
-            await message.channel.send(
-                "!Start <ip_address>[:port] [Server Name] - Start monitoring <ip_address>, [Server Name] is optional\n"
-                "!Query <ip_address>[:port] - List Current Players\n"
-                "!Stop  <ip_address>[:port] - Stop monitoring <ip_address>\n"
-                "!List - List all servers being monitored in this channel\n"
-                "!Help - Print this Message"
+        elif content in ["!help", "!h"]:
+            await channel.send(embed=self.help_embed())
+
+    def help_embed(self):
+        embed = discord.Embed(type="rich", title="Help")
+        embed.add_field(
+            name="Query",
+            value="!Query <ip_address> - List Current Players",
+            inline=False,
+        )
+        embed.add_field(
+            name="Start",
+            value="!Start <ip_address> [Server Name] - Start monitoring <ip_address>\nServer Name is optional",
+            inline=False,
+        )
+        embed.add_field(
+            name="Stop",
+            value="!Stop  <ip_address> - Stop monitoring <ip_address>",
+            inline=False,
+        )
+        embed.add_field(
+            name="List",
+            value="!List - List all servers being monitored in this channel",
+            inline=False,
+        )
+        embed.add_field(name="Help", value="!Help - Print this Message")
+        return embed
+
+    def lookup(self, address):
+        try:
+            return mcstatus.JavaServer.lookup(address).status()
+        except (ConnectionRefusedError, TimeoutError) as e:
+            logging.warning(f"Error getting status for {address}: {e}")
+            return f"Unable to reach server at {address}: {e}"
+        except Exception as e:
+            logging.error(f"Error looking up {address}: {e}", exc_info=True)
+            return f"Error looking up {address}: {e}"
+
+    def get_server_name(self, status):
+        if status.motd.to_plain() != "A Minecraft Server":
+            return status.motd.to_plain()
+        else:
+            return f"{status.address[0]}:{status.address[1]}"
+
+    def get_players(self, status):
+        if status.players.sample:
+            return set(p.name for p in status.players.sample)
+        else:
+            return set()
+
+    def get_server_icon(self, status):
+        if status.icon:
+            icon = BytesIO(base64.b64decode(status.icon.split(",")[-1]))
+            return discord.File(icon, filename="icon.png")
+        else:
+            icon = Image.open("icon.png")
+            buffer = BytesIO()
+            icon.save(buffer, format="PNG")
+            buffer.seek(0)
+            return discord.File(buffer, filename="icon.png")
+
+    def current_players(self, players):
+        return (
+            f"Current Players Online: **{', '.join(players) if players else 'None'}**"
+        )
+
+    def check_players(self, players, old, name):
+        message = ""
+        for player in players ^ old:
+            message += (
+                f"**{player}** has "
+                f"{'joined' if player in players else 'left'} {name}\n"
+            )
+        return message
+
+    def players_message(self, players, old, name):
+        if old is None:
+            return self.current_players(players)
+        else:
+            return self.check_players(players, old, name) + self.current_players(
+                players
             )
 
-    async def query(self, ip, port, channel):
-        try:
-            status = mcstatus.JavaServer.lookup(f"{ip}:{port}").status()
-            pls = status.players.sample
-            reply = (
-                f"Current Players Online: "
-                f'**{", ".join(p.name for p in pls) if pls else "None"}**'
-            )
-        except ConnectionRefusedError:
-            reply = "Connection Refused"
-        embed = discord.Embed(type="rich", description=reply)
-        await channel.send(embed=embed)
+    def make_embed(self, name, message, icon=None):
+        embed = discord.Embed(type="rich", title=name, description=message)
+        if icon:
+            embed.set_thumbnail(url="attachment://icon.png")
+        return embed
 
-    async def add_server(self, channel, server_ip, port, name):
-        try:
-            server = MCServer(channel.id, server_ip, port)
-            status = mcstatus.JavaServer.lookup(f"{server_ip}:{port}").status()
-            if name:
-                server.name = name
-            elif status.description != "A Minecraft Server":
-                server.name = status.description
-            else:
-                server.name = f"{server_ip}:{port}"
-            reply = f"Now monitoring {server.name}"
-            reply += "\nNote: Using mcstatus, player list may be inaccurate for large servers"
-            reply += "\nTurn on query in server.properties for better results"
-            self.servers += [server]
-            with open("servers.yml", "w") as file:
-                yaml.dump(self.servers, file)
-        except ConnectionRefusedError:
-            reply = "Connection Refused"
-        embed = discord.Embed(type="rich", description=reply)
-        await channel.send(embed=embed)
+    async def send_players_embed(self, status, channel, old=None):
+        players = self.get_players(status)
+        name = self.get_server_name(status)
+        message = self.players_message(players, old, name)
+        icon = self.get_server_icon(status)
+        embed = self.make_embed(name, message, icon)
+        await channel.send(embed=embed, file=icon)
 
-    async def remove_server(self, channel, server_ip, port):
+    async def query(self, ip, channel):
+        status = self.lookup(ip)
+        if isinstance(status, str):
+            embed = discord.Embed(type="rich", title="Error", description=status)
+            await channel.send(embed=embed)
+            return
+        await self.send_players_embed(status, channel)
+
+    async def add_server(self, channel, server_ip, name):
+        server = MCServer(channel.id, server_ip)
+        status = self.lookup(server_ip)
+        if isinstance(status, str):
+            embed = self.make_embed("Error", status)
+            await channel.send(embed=embed)
+            return
+        server.name = name if name else self.get_server_name(status)
+
+        self.servers += [server]
+        with open("servers.yml", "w") as file:
+            yaml.dump(self.servers, file)
+
+        message = f"Now monitoring {server.name}"
+        icon = self.get_server_icon(status)
+        embed = self.make_embed(server.name, message, icon)
+        await channel.send(embed=embed, file=icon)
+
+    async def remove_server(self, channel, address):
         found = False
         for server in self.servers.copy():
-            if (
-                server.ip == server_ip
-                and port == server.port
-                and server.channel_id == channel.id
-            ):
+            if server.address == address and server.channel_id == channel.id:
                 found = True
                 self.servers.remove(server)
                 message = f"No longer monitoring {server.name}"
-                embed = discord.Embed(type="rich", description=message)
+                embed = discord.Embed(
+                    type="rich", title=server.name, description=message
+                )
                 await channel.send(embed=embed)
         with open("servers.yml", "w") as file:
             yaml.dump(self.servers, file)
         if not found:
             await channel.send(
-                f"Unable to find server with ip {server_ip}:{port}\n"
-                f"Note: monitoring can only be stopped in the same channel it was started"
+                f"Unable to find server at {address}\n"
+                "Try using !List to see all servers being monitored in this channel\n"
             )
 
     async def list_servers(self, channel):
         reply = "Currently Monitoring:\n"
         for server in self.servers:
             if server.channel_id == channel.id:
-                if server.name == f"{server.ip}:{server.port}":
+                if server.name == f"{server.address}":
                     reply += f"\t{server.name}\n"
                 else:
-                    reply += f"\t{server.name} ({server.ip}:{server.port})\n"
+                    reply += f"\t{server.name} ({server.address})\n"
         if reply == "Currently Monitoring:\n":
             reply = "Not currently monitoring any servers\n"
-            reply += "Use !Start <ip_address>[:port] to start monitoring a server\n"
+            reply += "Use !Start <ip_address> to start monitoring a server\n"
             reply += "Use !Help for more info"
         embed = discord.Embed(type="rich", description=reply)
         await channel.send(embed=embed)
 
     @tasks.loop(seconds=60)
     async def server_status(self):
+        to_remove = []
         for server in self.servers:
-            reply = ""
-            try:
-                status = mcstatus.JavaServer.lookup(
-                    f"{server.ip}:{server.port}"
-                ).status()
-                server.timeout = 3600
-                if status.players.sample:
-                    pls = set(p.name for p in status.players.sample)
-                else:
-                    pls = set()
-                if pls != server.old:
-                    message = ""
-                    for player in pls ^ server.old:
-                        message += (
-                            f"**{player}** has "
-                            f"{'Joined' if player in pls else 'Left'} "
-                            f"{server.name}\n"
-                        )
-                    message += f'Current Players Online: **{", ".join(pls) if pls else "None"}**'
-                    embed = discord.Embed(type="rich", description=message)
-                    channel = await self.fetch_channel(server.channel_id)
-                    await channel.send(embed=embed)
-                server.old = set(pls)
-            except ConnectionRefusedError:
-                if server.timeout <= 0:
+            channel = await self.fetch_channel(server.channel_id)
+            status = self.lookup(server.address)
+            if isinstance(status, str):
+                if server.last_checked < datetime.now() - timedelta(hours=1):
                     reply = (
-                        "Unable to reach server for more than 1 hour"
-                        f"\nmonitoring stopped for {server.name}"
+                        f"Unable to reach server for more than 1 hour\n"
+                        f"monitoring stopped for {server.name}"
                     )
-                    self.servers.remove(server)
-                    embed = discord.Embed(type="rich", description=reply)
-                    channel = await self.fetch_channel(server.channel_id)
+                    to_remove += [server]
+                    embed = self.make_embed("Connection Refused", reply)
                     await channel.send(embed=embed)
-                else:
-                    server.timeout -= 60
-
-
-def extract_ip(ip_string):
-    # ip_string format: command ip_address[:port] [optional info]
-    # returns ip_address, port, optional info
-    match = re.match(r"(\S+)\s+([\w.]+)(?::(\S+))?(?:\s+(.*))?", ip_string)
-    if match:
-        ip = match.group(2)
-        port = match.group(3) if match.group(3) else 25565
-        info = match.group(4)
-        return ip, int(port), info
-    else:
-        return None, None, None
+                continue
+            players = self.get_players(status)
+            if players == server.old:
+                continue
+            await self.send_players_embed(status, channel, server.old)
+            server.old = set(players)
+            server.last_checked = datetime.now()
+        for server in to_remove:
+            self.servers.remove(server)
+        with open("servers.yml", "w") as file:
+            yaml.dump(self.servers, file)
 
 
 @dataclass
 class MCServer:
     channel_id: int
-    ip: str
-    port: int = 25565
+    address: str
     name: str = ""
     old: set[str] = field(repr=False, hash=False, default_factory=set)
-    timeout: int = field(repr=False, hash=False, default=3600)
+    last_checked: datetime = field(repr=False, hash=False, default_factory=datetime.now)
 
 
 def systray():
     image = Image.open("./icon.png")
     image = image.resize((64, 64))
     menu = Menu(MenuItem("Quit", lambda: os._exit(0)))
-    icon = Icon("Discord Bot", image, "AAA", menu)
+    icon = Icon(name="Discord Bot", icon=image, menu=menu)
     icon.run()
 
 
 if __name__ == "__main__":
     TOKEN = os.getenv("TOKEN")
     if not TOKEN:
-        print("TOKEN not set")
+        logging.error("No token found")
         exit()
     discordClient = MineClient(intents=discord.Intents.all())
     iconThread = Thread(target=systray)
