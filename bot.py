@@ -57,12 +57,13 @@ class MineClient(discord.Client):
             return
         content = message.content.lower()
         channel = message.channel
-        _, address, *etc = content.split()
-        etc = " ".join(etc)
-        if not content.startswith("!"):
+        if not content.startswith("!") or len(content.split()) < 2:
             return
 
-        elif content.startswith("!start"):
+        _, address, *etc = content.split()
+        etc = " ".join(etc)
+
+        if content.startswith("!start"):
             if address:
                 await self.add_server(channel, address, etc)
             else:
@@ -110,7 +111,7 @@ class MineClient(discord.Client):
     def lookup(self, address):
         try:
             return mcstatus.JavaServer.lookup(address).status()
-        except (ConnectionRefusedError, TimeoutError) as e:
+        except (ConnectionRefusedError, TimeoutError, IOError) as e:
             logging.warning(f"Error getting status for {address}: {e}")
             return f"Unable to reach server at {address}: {e}"
         except Exception as e:
