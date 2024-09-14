@@ -263,7 +263,7 @@ class MineClient(discord.Client):
             players = self.get_players(status)
             if players == server.old:
                 continue
-            await self.send_players_embed(status, channel, server.address, server.old)
+            await self.send_players_embed(status, channel, server.name, server.old)
             server.old = set(players)
             server.last_checked = datetime.now()
         for server in to_remove:
