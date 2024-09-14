@@ -43,7 +43,7 @@ class MineClient(discord.Client):
                         server.old = set()
                         status = self.lookup(server.address)
                         if not isinstance(status, str):
-                            server.name = self.get_server_name(status)
+                            server.name = self.get_server_name(status, server.address)
                             server.last_checked = datetime.now()
                 logging.info(
                     "Servers loaded: " + ", ".join([s.name for s in self.servers])
@@ -108,7 +108,7 @@ class MineClient(discord.Client):
         embed.add_field(name="Help", value="!Help - Print this Message")
         return embed
 
-    def lookup(self, address):
+    def lookup(self, address) -> mcstatus.status_response.JavaServerStatus:
         try:
             return mcstatus.JavaServer.lookup(address).status()
         except (ConnectionRefusedError, TimeoutError, IOError) as e:
@@ -118,11 +118,11 @@ class MineClient(discord.Client):
             logging.error(f"Error looking up {address}: {e}", exc_info=True)
             return f"Error looking up {address}: {e}"
 
-    def get_server_name(self, status):
+    def get_server_name(self, status, address):
         if status.motd.to_plain() != "A Minecraft Server":
             return status.motd.to_plain()
         else:
-            return f"{status.address[0]}:{status.address[1]}"
+            return address
 
     def get_players(self, status):
         if status.players.sample:
@@ -169,9 +169,9 @@ class MineClient(discord.Client):
             embed.set_thumbnail(url="attachment://icon.png")
         return embed
 
-    async def send_players_embed(self, status, channel, old=None):
+    async def send_players_embed(self, status, channel, address, old=None):
         players = self.get_players(status)
-        name = self.get_server_name(status)
+        name = self.get_server_name(status, address)
         message = self.players_message(players, old, name)
         icon = self.get_server_icon(status)
         embed = self.make_embed(name, message, icon)
@@ -183,7 +183,7 @@ class MineClient(discord.Client):
             embed = discord.Embed(type="rich", title="Error", description=status)
             await channel.send(embed=embed)
             return
-        await self.send_players_embed(status, channel)
+        await self.send_players_embed(status, channel, ip)
 
     async def add_server(self, channel, server_ip, name):
         server = MCServer(channel.id, server_ip)
@@ -192,7 +192,7 @@ class MineClient(discord.Client):
             embed = self.make_embed("Error", status)
             await channel.send(embed=embed)
             return
-        server.name = name if name else self.get_server_name(status)
+        server.name = name if name else self.et_server_name(status, server_ip)
 
         self.servers += [server]
         with open("servers.yml", "w") as file:
@@ -256,7 +256,7 @@ class MineClient(discord.Client):
             players = self.get_players(status)
             if players == server.old:
                 continue
-            await self.send_players_embed(status, channel, server.old)
+            await self.send_players_embed(status, channel, server.address, server.old)
             server.old = set(players)
             server.last_checked = datetime.now()
         for server in to_remove:
