@@ -57,7 +57,7 @@ class MineClient(discord.Client):
             return
         content = message.content.lower()
         channel = message.channel
-        if not content.startswith("!") or len(content.split()) < 2:
+        if not content.startswith("!"):
             return
 
         _, address, *etc = content.split()
@@ -81,7 +81,10 @@ class MineClient(discord.Client):
         elif content in ["!list", "!l"]:
             await self.list_servers(channel)
         elif content in ["!help", "!h"]:
+            logging.info("Help")
             await channel.send(embed=self.help_embed())
+        else:
+            logging.warning(f"Unknown command: {content}")
 
     def help_embed(self):
         embed = discord.Embed(type="rich", title="Help")
@@ -108,7 +111,7 @@ class MineClient(discord.Client):
         embed.add_field(name="Help", value="!Help - Print this Message")
         return embed
 
-    def lookup(self, address) -> mcstatus.status_response.JavaServerStatus:
+    def lookup(self, address) -> mcstatus.status_response.JavaStatusResponse:
         try:
             return mcstatus.JavaServer.lookup(address).status()
         except (ConnectionRefusedError, TimeoutError, IOError) as e:
@@ -178,6 +181,7 @@ class MineClient(discord.Client):
         await channel.send(embed=embed, file=icon)
 
     async def query(self, ip, channel):
+        logging.info(f"Querying {ip}")
         status = self.lookup(ip)
         if isinstance(status, str):
             embed = discord.Embed(type="rich", title="Error", description=status)
@@ -186,6 +190,7 @@ class MineClient(discord.Client):
         await self.send_players_embed(status, channel, ip)
 
     async def add_server(self, channel, server_ip, name):
+        logging.info(f"Adding server {server_ip} to {channel}")
         server = MCServer(channel.id, server_ip)
         status = self.lookup(server_ip)
         if isinstance(status, str):
@@ -204,6 +209,7 @@ class MineClient(discord.Client):
         await channel.send(embed=embed, file=icon)
 
     async def remove_server(self, channel, address):
+        logging.info(f"Removing server {address} from {channel}")
         found = False
         for server in self.servers.copy():
             if server.address == address and server.channel_id == channel.id:
@@ -223,6 +229,7 @@ class MineClient(discord.Client):
             )
 
     async def list_servers(self, channel):
+        logging.info("Listing servers")
         reply = "Currently Monitoring:\n"
         for server in self.servers:
             if server.channel_id == channel.id:
