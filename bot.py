@@ -37,7 +37,7 @@ class MineClient(discord.Client):
         try:
             with open("servers.yml", "r") as file:
                 self.servers = yaml.load(file, Loader)
-                logging.info(f"Loaded {len(self.servers)} servers")
+                logging.info(f"Loaded {len(self.servers)} server{'' if len(self.servers) == 1 else 's'}")
                 for server in self.servers:
                     if server.last_checked < datetime.now() - timedelta(days=1):
                         server.old = set()
