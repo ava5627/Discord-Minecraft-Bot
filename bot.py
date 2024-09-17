@@ -254,8 +254,10 @@ class MineClient(discord.Client):
                 if server.last_checked < datetime.now() - timedelta(hours=1):
                     reply = (
                         f"Unable to reach server for more than 1 hour\n"
-                        f"monitoring stopped for {server.name}"
+                        f"monitoring stopped for {server.name}\n"
+                        f"Error: {status}"
                     )
+                    logging.error(reply)
                     to_remove += [server]
                     embed = self.make_embed("Connection Refused", reply)
                     await channel.send(embed=embed)
