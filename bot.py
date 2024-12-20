@@ -60,8 +60,12 @@ class MineClient(discord.Client):
         if not content.startswith("!"):
             return
 
-        _, address, *etc = content.split()
-        etc = " ".join(etc)
+        if len(content.split()) > 1:
+            _, address, *etc = content.split()
+            etc = " ".join(etc)
+        else:
+            address = None
+            etc = []
 
         if content.startswith("!start"):
             if address:
