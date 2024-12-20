@@ -201,7 +201,7 @@ class MineClient(discord.Client):
             embed = self.make_embed("Error", status)
             await channel.send(embed=embed)
             return
-        server.name = name if name else self.et_server_name(status, server_ip)
+        server.name = name if name else self.get_server_name(status, server_ip)
 
         self.servers += [server]
         with open("servers.yml", "w") as file:
