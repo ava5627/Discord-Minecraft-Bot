@@ -8,4 +8,5 @@ pkgs.mkShell {
     gobject-introspection
     gtk3
   ];
+  PYSTRAY_BACKEND = "appindicator";
 }
